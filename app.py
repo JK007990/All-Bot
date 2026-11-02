@@ -19,7 +19,7 @@ from telegram.ext import (
 # ==========================================
 
 TELEGRAM_TOKEN = "8790403491:AAH1qULj2YsTiZVFjrGLbRady7ftQ0Axg6c"
-OPENROUTER_API_KEY = "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"
+OPENROUTER_API_KEY = "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"
 ADMIN_CHAT_ID = 5023396190
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
