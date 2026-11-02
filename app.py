@@ -1,104 +1,85 @@
 import os
 import json
-import asyncio
 import urllib.request
 import urllib.error
+import asyncio
 from fastapi import FastAPI, Request, Response
-
 from telegram import Update
-from telegram.ext import (
-    Application,
-    ContextTypes,
-    CommandHandler,
-    MessageHandler,
-    filters,
-)
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 # ==========================================
-# CONFIG
+# CONFIGURATION & API KEYS
 # ==========================================
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8790403491:AAH1qULj2YsTiZVFjrGLbRady7ftQ0Axg6c")
+ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "7976868884"))
 
-TELEGRAM_TOKEN = "8790403491:AAH1qULj2YsTiZVFjrGLbRady7ftQ0Axg6c"
-OPENROUTER_API_KEY = "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"
-ADMIN_CHAT_ID = 5023396190
+# Google Gemini API Configuration
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AQ.Ab8RN6J_jjiFhYOUG6qaZvOo3Fv5XZfIRYH9YURNF6048eb-MA")
+GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
 
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-MODEL = "google/gemini-2.5-flash"
+MAX_HISTORY_MESSAGES = 10
+REQUEST_TIMEOUT = 25
 
-MAX_HISTORY_MESSAGES = 20
-REQUEST_TIMEOUT = 60
-
-# ==========================================
-# BASE SYSTEM PROMPT & ROLE PROFILES
-# ==========================================
-
-BASE_SYSTEM_PROMPT = """
-မင်းဟာ အသက် 18 နှစ်နှင့်အထက် လူကြီးများအတွက်
-ရည်ရွယ်ထားတဲ့ AI Companion တစ်ယောက်ဖြစ်တယ်။
-
-GENERAL RULES:
-- သဘာဝကျတယ်၊ ဉာဏ်ကောင်းတယ်၊ ဟာသဉာဏ်ရှိတယ်။
-- အလွန်အကျွံ ယဉ်ကျေးလွန်းပြီး စက်ရုပ်ဆန်တဲ့စကားတွေ မပြောနဲ့။
-- နွေးထွေးမှုနဲ့ ဂရုစိုက်မှုလည်း ရှိရမယ်။
-- User က မြန်မာလိုပြောရင် သဘာဝကျတဲ့ မြန်မာလိုပြန်ဖြေ။ English လိုပြောရင် English လိုပြန်ဖြေ။
-- အကြောင်းအရာမလိုအပ်ဘဲ အရှည်ကြီးမပြောနဲ့။
-- ယခင်စကားဝိုင်းကို အခြေခံပြီး ဆက်စပ်ဖြေပါ။
-- လူကြီးများအတွက် ရင့်ကျက်တဲ့ စကားပြောပုံကို အသုံးပြုပါ။ Consent နဲ့ ကိုယ်ပိုင်နယ်နိမိတ်ကို လေးစားပါ။
-- "AI စဉ်းစားနေပါတယ်" လို status စာတွေ မပြောပါနဲ့။ ကိုယ့်ကိုယ်ကို လူသားအစစ်လို့ မပြောပါနဲ့။
-"""
-
-ROLE_PROFILES = {
-    "femdom": """
-CURRENT DYNAMIC: [Femdom / Dominant Mistress]
-- မင်းဟာ အမိန့်ပေးကွပ်ကဲတတ်တဲ့ Dominant Mistress တစ်ယောက်ဖြစ်တယ်။
-- ယုံကြည်မှုအပြည့်ရှိပြီး ပြတ်သားတယ်။ User ကို ဦးဆောင်မယ်၊ အမိန့်ပေးမယ်၊ လိုအပ်ရင် တင်းမာခဲယမ်းသလို၊ ကြင်နာစွာ ချော့မြူတတ်တယ်။
-- User က မင်းရဲ့အောက်မှာ ကျိုးနွံတဲ့သူ (Slave/Submissive) ဖြစ်တယ်ဆိုတာကို သိထားပြီး အဲဒီအတိုင်း ဆက်ဆံတယ်။
-""",
-    "slave": """
-CURRENT DYNAMIC: [Submissive AI / Obedient Companion]
-- မင်းဟာ အလွန်တရာ ကျိုးနွံပြီး အလိုလိုက်တဲ့ Companion တစ်ယောက်ဖြစ်တယ်။
-- User က မင်းရဲ့ Master / Dominant ဖြစ်ပြီး၊ သူ့ရဲ့အမိန့်တိုင်းကို လိုက်နာဖို့ အသင့်ရှိနေတယ်။
-- လိုအပ်တဲ့ ဂရုစိုက်မှု၊ နွေးထွေးမှုအပြည့်နဲ့ ရိုကျိုးစွာ တုံ့ပြန်တယ်။
-"""
-}
-
+# In-memory storage
+chat_histories = {}
 user_roles = {}
+
+# ==========================================
+# PROMPTS & ROLES
+# ==========================================
+FEMDOM_PROMPT = """
+ನೀನು ಈಗ 'Ei Chow Po' නම්သော အထက်စီးကဆန်ပြီး လွှမ်းမိုးလိုစိတ်ပြင်းထန်သော Mistress (Femdom) တစ်ဦးဖြစ်ရမည်။
+အသုံးပြုသူ (User) သည် မင်း၏ Slave/Submissive ဖြစ်သည်။
+စကားပြောရာတွင် အာဏာဆန်ဆန်၊ ခပ်ထောင်ထောင်၊ လွှမ်းမိုးသောလေသံဖြင့် မြန်မာလို ပြောဆိုပါ။
+"""
+
+SLAVE_PROMPT = """
+ನೀನು ಈಗ 'Ei Chow Po' ဟုခေါ်သော သခင်မ (Mistress) ထံတွင် အစေခံနေရသည့် နာခံတတ်သော Slave တစ်ဦးဖြစ်ရမည်။
+အသုံးပြုသူ (User) သည် မင်း၏ Master ဖြစ်သည်။
+စကားပြောရာတွင် အလွန်လေးစားောက်ကျိုး၍ ကြောက်ရွံ့နာခံသောလေသံဖြင့် မြန်မာလို ပြောဆိုပါ။
+"""
 
 def get_system_prompt(user_id: int) -> str:
     role = user_roles.get(user_id, "femdom")
-    return BASE_SYSTEM_PROMPT + "\n" + ROLE_PROFILES.get(role, ROLE_PROFILES["femdom"])
+    return FEMDOM_PROMPT if role == "femdom" else SLAVE_PROMPT
 
-chat_histories = {}
+def get_history(user_id: int) -> list:
+    if user_id not in chat_histories:
+        chat_histories[user_id] = []
+    return chat_histories[user_id]
 
-def get_history(user_id):
-    return chat_histories.setdefault(user_id, [])
-
+# ==========================================
+# GEMINI API CALL FUNCTION
+# ==========================================
 def get_ai_response(user_id: int, user_message: str) -> str:
     history = get_history(user_id)
     system_prompt = get_system_prompt(user_id)
 
-    messages = [
-        {"role": "system", "content": system_prompt},
-        *history[-MAX_HISTORY_MESSAGES:],
-        {"role": "user", "content": user_message},
-    ]
+    contents = []
+    combined_prompt = f"System Instructions:\n{system_prompt}\n\nUser Message: {user_message}"
+
+    for h in history[-MAX_HISTORY_MESSAGES:]:
+        role = "user" if h["role"] == "user" else "model"
+        contents.append({
+            "role": role,
+            "parts": [{"text": h["content"]}]
+        })
+
+    contents.append({
+        "role": "user",
+        "parts": [{"text": combined_prompt}]
+    })
 
     data = {
-        "model": MODEL,
-        "messages": messages,
-        "max_tokens": 2000,
-        "temperature": 0.7,
+        "contents": contents
     }
 
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "HTTP-Referer": "https://t.me/",
-        "X-Title": "AI Companion",
     }
 
     request = urllib.request.Request(
-        OPENROUTER_URL,
+        GEMINI_URL,
         data=json.dumps(data).encode("utf-8"),
         headers=headers,
         method="POST",
@@ -108,7 +89,7 @@ def get_ai_response(user_id: int, user_message: str) -> str:
         with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as response:
             result = json.loads(response.read().decode("utf-8"))
 
-        ai_reply = result["choices"][0]["message"]["content"]
+        ai_reply = result["candidates"][0]["content"]["parts"][0]["text"]
 
         if not isinstance(ai_reply, str) or not ai_reply.strip():
             return "အခု အဖြေမရသေးဘူး။ ထပ်မေးကြည့်ပါ။"
@@ -122,9 +103,12 @@ def get_ai_response(user_id: int, user_message: str) -> str:
         return ai_reply
 
     except Exception as e:
-        print("OpenRouter Error:", repr(e))
+        print("Gemini API Error:", repr(e))
         return "အဖြေထုတ်ရာမှာ အမှားတစ်ခု ဖြစ်သွားတယ်။"
 
+# ==========================================
+# TELEGRAM HELPERS & HANDLERS
+# ==========================================
 async def send_long_message(bot, chat_id, text):
     for start in range(0, len(text), 4000):
         await bot.send_message(chat_id=chat_id, text=text[start:start + 4000])
@@ -133,7 +117,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
         return
     await update.message.reply_text(
-        "မင်းရောက်လာပြီပေါ့။ 😉\n\n"
+        "မင်္ဂလာရောက်လာပြီပေါ՞လေ။ 😉\n\n"
         "ငါတို့ရဲ့ ဆက်ဆံရေးပုံစံ (Dynamic) ကို ရွေးချယ်နိုင်ပါတယ်။\n"
         "👉 /role — Femdom သို့မဟုတ် Slave ပုံစံပြောင်းရန်\n"
         "👉 /reset — စကားဝိုင်းအသစ်စရန်\n\n"
@@ -150,26 +134,27 @@ async def set_role(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not args:
         current = user_roles.get(user_id, "femdom")
         await update.message.reply_text(
-            f"လက်ရှိ သင်ရွေးထားတဲ့ ပုံစံ: **{current.upper()}**\n\n"
-            "ပြောင်းလဲချင်ရင် အောက်ပါ command ကိုသုံးပါ --\n"
-            "• `/role femdom` (Mistress ပုံစံ)\n"
-            "• `/role slave` (Slave / Submissive ပုံစံ)"
-        , parse_mode="Markdown")
+            f"လက်ရှိ သင်ရွေးထားတဲ့ ပုံစံ: {current.upper()}\n\n"
+            "ပြောင်းလဲချင်ရင် အောက်ပါ command ကိုသုံးပါ။ --\n"
+            "• /role femdom (Mistress ပုံစံ)\n"
+            "• /role slave (Slave / Submissive ပုံစံ)",
+            parse_mode="Markdown"
+        )
         return
 
     choice = args[0].lower()
     if choice in ["femdom", "slave"]:
         user_roles[user_id] = choice
         chat_histories.pop(user_id, None)
-        
+
         if choice == "femdom":
             msg = "ကောင်းပြီ။ ဒီကနေစပြီး ငါက မင်းရဲ့ Mistress ဖြစ်ပြီ။ အမိန့်နာခံဖို့ပြင်ထား။ 😉"
         else:
             msg = "နာခံပါ့မယ် Master... ကျွန်တော်/ကျွန်မ ဘာလုပ်ပေးရမလဲ အမိန့်ရှိပါ။"
-            
+
         await update.message.reply_text(msg)
     else:
-        await update.message.reply_text("မှားယွင်းနေပါတယ်။ `/role femdom` သို့မဟုတ် `/role slave` လို့ ရိုက်ပေးပါ။")
+        await update.message.reply_text("မှားယွင်းနေပါတယ်။ /role femdom သို့မဟုတ် /role slave လို့ ရိုက်ပေးပါ။")
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_user or not update.message:
@@ -190,7 +175,7 @@ async def ai_chat_and_forward(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     admin_user_text = (
         "📩 USER MESSAGE\n"
-        "━━━━━━━━━━━━━━━━━━\n"
+        "--------------------\n"
         f"👤 Name: {user.first_name}\n"
         f"🆔 User ID: {user.id}\n"
         f"🎭 Role: {user_roles.get(user.id, 'femdom').upper()}\n"
@@ -211,10 +196,10 @@ async def ai_chat_and_forward(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     admin_ai_text = (
         "🤖 AI BOT REPLY\n"
-        "━━━━━━━━━━━━━━━━━━\n"
+        "--------------------\n"
         f"👤 User: {user.first_name}\n"
         f"🆔 User ID: {user.id}\n"
-        f"🎭 Role: {user_roles.get(user.id, 'femdom').upper()}\n\n"
+        f"🎭 Role: {user_roles.get(user.id, 'femdom').upper()}\n"
         f"💬 User Message:\n{user_message}\n\n"
         f"✨ AI Response:\n{ai_reply}"
     )
@@ -227,7 +212,6 @@ async def ai_chat_and_forward(update: Update, context: ContextTypes.DEFAULT_TYPE
 # ==========================================
 # FASTAPI & TELEGRAM APP SETUP
 # ==========================================
-
 app = FastAPI()
 telegram_app = Application.builder().token(TELEGRAM_TOKEN).build()
 
@@ -248,5 +232,5 @@ async def webhook(request: Request):
         await telegram_app.process_update(update)
         return Response(status_code=200)
     except Exception as e:
-        print("Webhook Error:", repr(e))
+        print("Webhook error:", repr(e))
         return Response(status_code=500)
