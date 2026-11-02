@@ -249,3 +249,7 @@ async def webhook(request: Request):
     except Exception as e:
         print("Webhook Error:", repr(e))
         return Response(status_code=500)
+
+@app.get("/")
+async def root():
+    return {"status": "Bot is running!"}
